@@ -26,3 +26,8 @@ Domain Finder — это кроссплатформенное приложени
    Откройте терминал в папке с проектом и выполните команду:
    ```bash
    pip install -r requirements.txt
+   ```
+4. **Запуск**:
+   ```bash
+   python app.py
+   ```

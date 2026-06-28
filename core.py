@@ -15,7 +15,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Iterable
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import requests
 
@@ -27,6 +27,7 @@ USER_AGENT = "domain-finder/1.0 (+local)"
 DATA_DIR = Path(__file__).parent
 KNOWN_SITES_PATH = DATA_DIR / "known_sites.json"
 RESULTS_DIR = DATA_DIR / "results"
+SUPPORTED_SOURCES = ("crt.sh", "hackertarget")
 
 
 def load_known_sites() -> dict[str, list[str]]:
@@ -39,41 +40,79 @@ def load_known_sites() -> dict[str, list[str]]:
         return {}
 
 
+def _normalize_domain_input(value: str) -> str:
+    """Extract and normalize a hostname from domain-like user input."""
+    value = str(value or "").strip().lower()
+    if not value:
+        return ""
+
+    if "://" in value or value.startswith("//"):
+        parsed = urlsplit(value if "://" in value else f"https:{value}")
+        host = parsed.hostname or ""
+    else:
+        candidate = value.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0]
+        if "@" in candidate:
+            candidate = candidate.rsplit("@", 1)[-1]
+        parsed = urlsplit(f"//{candidate}")
+        host = parsed.hostname or candidate
+
+    while host.startswith("*."):
+        host = host[2:]
+    host = host.strip(".")
+
+    try:
+        return host.encode("idna").decode("ascii")
+    except UnicodeError:
+        return ""
+
+
+def _unique_valid_domains(values: Iterable[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        domain = _normalize_domain_input(value)
+        if domain in seen or not _is_valid_domain(domain):
+            continue
+        seen.add(domain)
+        out.append(domain)
+    return out
+
+
 def resolve_keyword(keyword: str) -> list[str]:
-    """If `keyword` contains a dot it's treated as a domain.
-    Otherwise look it up in known_sites.json (case‑insensitive).
-    If not found there, treat the keyword itself as a domain to query.
-    """
-    keyword = keyword.strip().lower()
+    """Resolve a known keyword or validated domain-like input to base domains."""
+    raw_keyword = str(keyword or "").strip()
+    keyword = raw_keyword.lower()
     if not keyword:
         return []
 
-    # Looks like a domain
-    if "." in keyword and re.match(r"^[a-zA-Z0-9._-]+$", keyword):
-        return [keyword]
+    domain = _normalize_domain_input(raw_keyword)
+    if _is_valid_domain(domain):
+        return [domain]
 
     sites = load_known_sites()
     normalized_sites = {k.lower(): v for k, v in sites.items()}
     if keyword in normalized_sites:
-        return list(normalized_sites[keyword])
+        return _unique_valid_domains(normalized_sites[keyword])
 
     for key, domains in normalized_sites.items():
         if key in keyword or keyword in key:
-            return list(domains)
+            return _unique_valid_domains(domains)
 
-    # Not in known_sites.json, treat the keyword itself as a domain
-    return [keyword]
+    return []
 
 
 def _is_valid_domain(value: str) -> bool:
-    value = value.strip().lower().lstrip("*.")
+    value = _normalize_domain_input(value)
     if not value or "." not in value:
         return False
-    if " " in value or "\n" in value:
+    if len(value) > 253 or ".." in value:
         return False
-    if value.startswith(".") or value.endswith("."):
-        return False
-    return bool(re.match(r"^[a-z0-9.\-_]{1,253}$", value))
+    labels = value.split(".")
+    return all(
+        0 < len(label) <= 63
+        and re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label)
+        for label in labels
+    )
 
 
 def _clean(raw: Iterable[str]) -> set[str]:
@@ -82,7 +121,7 @@ def _clean(raw: Iterable[str]) -> set[str]:
         if not item:
             continue
         for part in str(item).split("\n"):
-            d = part.strip().lower().lstrip("*.")
+            d = _normalize_domain_input(part)
             if _is_valid_domain(d):
                 out.add(d)
     return out
@@ -163,23 +202,75 @@ def search(
 
     started = time.time()
     timestamp = datetime.now().isoformat(timespec="seconds")
+    keyword = str(keyword or "").strip()
+    selected_sources = [
+        source
+        for source in dict.fromkeys(sources or [])
+        if source in SUPPORTED_SOURCES
+    ]
+
+    def build_payload(
+        resolved: list[str],
+        stats: dict[str, dict],
+        domains: list[dict],
+        logs: list[tuple[str, str]],
+    ) -> dict:
+        return {
+            "keyword": keyword,
+            "resolved": resolved,
+            "timestamp": timestamp,
+            "duration_seconds": round(time.time() - started, 2),
+            "sources": stats,
+            "total_unique": len(domains),
+            "domains": domains,
+            "logs": logs,
+        }
+
+    if not keyword:
+        msg = "Empty keyword; nothing to search."
+        emit(msg, "warn", 100)
+        return build_payload([], {}, [], [("warn", msg)])
+
+    if not selected_sources:
+        msg = "No supported sources selected."
+        emit(msg, "warn", 100)
+        return build_payload([], {}, [], [("warn", msg)])
 
     emit(f"Resolving keyword: {keyword}", "info", 5)
     base_domains = resolve_keyword(keyword)
+    if not base_domains:
+        msg = f"No valid base domains resolved for keyword: {keyword}"
+        emit(msg, "warn", 100)
+        return build_payload([], {}, [], [("warn", msg)])
+
     emit(f"Resolved to base domains: {', '.join(base_domains)}", "ok", 10)
 
     all_domains: dict[str, set[str]] = {}
     stats: dict[str, dict] = {}
+    source_successes: dict[str, int] = {}
     log_lines: list[tuple[str, str]] = []
-    log_lines.append(("info", f"Keyword '{keyword}' → {', '.join(base_domains)}"))
+    log_lines.append(("info", f"Keyword '{keyword}' -> {', '.join(base_domains)}"))
 
-    total_steps = max(1, len(base_domains) * len(sources))
+    total_steps = max(1, len(base_domains) * len(selected_sources))
     step = 0
     base_pct = 15
     pct_range = 80  # 15 -> 95
 
+    def record_result(source: str, base: str, found: set[str], err: str | None) -> None:
+        entry = stats.setdefault(source, {"count": 0, "status": "ok", "errors": []})
+        if err:
+            error = f"{base}: {err}"
+            entry["errors"].append(error)
+            entry.setdefault("error", error)
+            return
+
+        source_successes[source] = source_successes.get(source, 0) + 1
+        entry["count"] = entry.get("count", 0) + len(found)
+        for domain in found:
+            all_domains.setdefault(domain, set()).add(source)
+
     for base in base_domains:
-        if "crt.sh" in sources:
+        if "crt.sh" in selected_sources:
             step += 1
             pct = base_pct + int(pct_range * step / total_steps)
             emit(f"Querying crt.sh for *.{base} ...", "info", pct)
@@ -187,16 +278,13 @@ def search(
             if err:
                 emit(f"crt.sh failed for {base}: {err}", "warn", pct)
                 log_lines.append(("warn", f"crt.sh({base}): {err}"))
-                stats.setdefault("crt.sh", {"count": 0, "status": "error", "error": err})
+                record_result("crt.sh", base, found, err)
             else:
                 emit(f"crt.sh returned {len(found)} subdomains for {base}", "ok", pct)
                 log_lines.append(("ok", f"crt.sh({base}): {len(found)} subdomains"))
-                existing = stats.setdefault("crt.sh", {"count": 0, "status": "ok"})
-                existing["count"] = existing.get("count", 0) + len(found)
-                for d in found:
-                    all_domains.setdefault(d, set()).add("crt.sh")
+                record_result("crt.sh", base, found, None)
 
-        if "hackertarget" in sources:
+        if "hackertarget" in selected_sources:
             step += 1
             pct = base_pct + int(pct_range * step / total_steps)
             emit(f"Querying HackerTarget for {base} ...", "info", pct)
@@ -204,30 +292,27 @@ def search(
             if err:
                 emit(f"HackerTarget failed for {base}: {err}", "warn", pct)
                 log_lines.append(("warn", f"hackertarget({base}): {err}"))
-                stats.setdefault("hackertarget", {"count": 0, "status": "error", "error": err})
+                record_result("hackertarget", base, found, err)
             else:
                 emit(f"HackerTarget returned {len(found)} hosts for {base}", "ok", pct)
                 log_lines.append(("ok", f"hackertarget({base}): {len(found)} hosts"))
-                existing = stats.setdefault("hackertarget", {"count": 0, "status": "ok"})
-                existing["count"] = existing.get("count", 0) + len(found)
-                for d in found:
-                    all_domains.setdefault(d, set()).add("hackertarget")
+                record_result("hackertarget", base, found, None)
 
     merged: list[dict] = []
     for d, srcs in all_domains.items():
         merged.append({"domain": d, "sources": sorted(srcs)})
     merged.sort(key=lambda x: x["domain"])
 
+    for source, entry in stats.items():
+        errors = entry.get("errors", [])
+        successes = source_successes.get(source, 0)
+        if errors and successes:
+            entry["status"] = "partial"
+        elif errors:
+            entry["status"] = "error"
+        else:
+            entry["status"] = "ok"
+
     duration = round(time.time() - started, 2)
     emit(f"Done. Total unique domains: {len(merged)} ({duration}s)", "ok", 100)
-
-    return {
-        "keyword": keyword,
-        "resolved": base_domains,
-        "timestamp": timestamp,
-        "duration_seconds": duration,
-        "sources": stats,
-        "total_unique": len(merged),
-        "domains": merged,
-        "logs": log_lines,
-    }
+    return build_payload(base_domains, stats, merged, log_lines)

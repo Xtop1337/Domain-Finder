@@ -6,13 +6,11 @@ Run with: python app.py
 from __future__ import annotations
 
 import asyncio
-import json
 from datetime import datetime
-from pathlib import Path
 
 import flet as ft
 
-from core import RESULTS_DIR, search, save_json
+from core import search, save_json
 
 
 LEVEL_COLORS = {
@@ -48,6 +46,8 @@ def main(page: ft.Page) -> None:
 
     last_payload: dict | None = None
     is_searching = False
+    clipboard = ft.Clipboard()
+    page.services.append(clipboard)
 
     def append_log(message: str, level: str) -> None:
         ts = datetime.now().strftime("%H:%M:%S")
@@ -134,8 +134,32 @@ def main(page: ft.Page) -> None:
         append_log(f"Старт поиска для '{keyword}' (источники: {', '.join(sources)})", "info")
         page.update()
 
+        loop = asyncio.get_running_loop()
+        progress_queue: asyncio.Queue[tuple[str, str, int]] = asyncio.Queue()
+
+        def queue_progress(message: str, level: str, pct: int) -> None:
+            loop.call_soon_threadsafe(progress_queue.put_nowait, (message, level, pct))
+
+        async def run_search_worker() -> dict:
+            task = asyncio.create_task(
+                asyncio.to_thread(search, keyword, sources, queue_progress)
+            )
+            while True:
+                if task.done():
+                    await asyncio.sleep(0)
+                    if progress_queue.empty():
+                        return await task
+                try:
+                    message, level, pct = await asyncio.wait_for(
+                        progress_queue.get(),
+                        timeout=0.1,
+                    )
+                except asyncio.TimeoutError:
+                    continue
+                on_progress(message, level, pct)
+
         try:
-            payload = await asyncio.to_thread(search, keyword, sources, on_progress)
+            payload = await run_search_worker()
         except Exception as exc:
             append_log(f"Ошибка выполнения: {exc}", "error")
             payload = None
@@ -185,16 +209,24 @@ def main(page: ft.Page) -> None:
         copy_button.disabled = payload["total_unique"] == 0
         page.update()
 
-    def copy_all(_=None) -> None:
+    async def copy_all_async(_=None) -> None:
         if not last_payload:
             return
         text = "\n".join(e["domain"] for e in last_payload.get("domains", []))
-        page.set_clipboard(text)
+        try:
+            await clipboard.set(text)
+        except Exception as exc:
+            append_log(f"Не удалось скопировать: {exc}", "error")
+            page.update()
+            return
         append_log(f"Скопировано {last_payload['total_unique']} доменов в буфер.", "ok")
         page.show_dialog(
             ft.SnackBar(content=ft.Text("Скопировано в буфер обмена"), open=True)
         )
         page.update()
+
+    def copy_all(_=None) -> None:
+        page.run_task(copy_all_async)
 
     def save_to_file(_=None) -> None:
         if not last_payload:
