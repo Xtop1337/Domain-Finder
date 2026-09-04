@@ -80,3 +80,18 @@ The tool accepts a keyword (e.g., a brand or website name) or a base domain as i
    ```bash
    python app.py
    ```
+
+## Сборка EXE
+
+Сборка выполняется на Windows из корня репозитория. Установите зависимости для
+разработки и запустите PyInstaller:
+
+```powershell
+py -m pip install -r requirements-dev.txt
+py -m PyInstaller --noconfirm --clean Domain-Finder.spec
+```
+
+Конфигурация собирает точку входа `app.py` в оконное приложение без консоли,
+включает `known_sites.json` в пакет и задаёт имя исполняемого файла
+`Domain-Finder`. Готовый файл находится по пути
+`dist\Domain-Finder.exe`.
