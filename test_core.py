@@ -1,6 +1,18 @@
+from pathlib import Path
+
 import pytest
 
 import core
+
+
+def test_frozen_windows_results_use_local_app_data(monkeypatch):
+    monkeypatch.setattr(core.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(core.sys, "platform", "win32")
+    monkeypatch.setenv("LOCALAPPDATA", r"C:\Users\alice\AppData\Local")
+
+    assert core._get_results_dir() == (
+        Path(r"C:\Users\alice\AppData\Local") / "Domain-Finder" / "results"
+    )
 
 
 def test_resolve_keyword_normalizes_domain_like_input():

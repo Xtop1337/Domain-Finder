@@ -10,7 +10,9 @@ from __future__ import annotations
 import csv
 import io
 import json
+import os
 import re
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -26,7 +28,22 @@ USER_AGENT = "domain-finder/1.0 (+local)"
 
 DATA_DIR = Path(__file__).parent
 KNOWN_SITES_PATH = DATA_DIR / "known_sites.json"
-RESULTS_DIR = DATA_DIR / "results"
+APP_NAME = "Domain-Finder"
+
+
+def _get_results_dir() -> Path:
+    """Return a persistent, per-user directory for exported search results."""
+    if getattr(sys, "frozen", False):
+        if sys.platform == "win32":
+            base_dir = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
+            if base_dir:
+                return Path(base_dir) / APP_NAME / "results"
+        return Path.home() / ".local" / "share" / APP_NAME / "results"
+
+    return DATA_DIR / "results"
+
+
+RESULTS_DIR = _get_results_dir()
 SUPPORTED_SOURCES = ("crt.sh", "hackertarget")
 
 
@@ -169,7 +186,7 @@ def _query_hackertarget(domain: str) -> tuple[set[str], str | None]:
 
 
 def _ensure_results_dir() -> None:
-    RESULTS_DIR.mkdir(exist_ok=True)
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def save_json(keyword: str, payload: dict) -> Path:

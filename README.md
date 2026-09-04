@@ -8,7 +8,7 @@ Domain Finder — это кроссплатформенное приложени
   * `crt.sh` (поиск по сертификатам Transparency Logs).
   * `HackerTarget` (Host Search API).
 * **Удобный GUI**: Интерфейс написан на [Flet](https://flet.dev/) с поддержкой темной и светлой темы, логами в реальном времени и индикатором прогресса.
-* **Экспорт данных**: Найденные уникальные домены можно скопировать в буфер обмена одной кнопкой или сохранить в формате `.json` в папку `results/`.
+* **Экспорт данных**: Найденные уникальные домены можно скопировать в буфер обмена одной кнопкой или сохранить в формате `.json`. При запуске из исходников файлы попадают в `results/`, а Windows EXE сохраняет их в `%LOCALAPPDATA%\\Domain-Finder\\results`.
 
 ## 📁 Структура проекта
 
@@ -49,7 +49,7 @@ The tool accepts a keyword (e.g., a brand or website name) or a base domain as i
   * `crt.sh` (certificate search via Transparency Logs)
   * `HackerTarget` (Host Search API)
 * **User-friendly GUI**: Built with [Flet](https://flet.dev/), featuring dark/light themes, real-time logs, and a progress indicator.
-* **Data export**: Discovered unique domains can be copied to the clipboard with one click or saved as `.json` files in the `results/` directory.
+* **Data export**: Discovered unique domains can be copied to the clipboard with one click or saved as `.json` files. Source runs use the `results/` directory, while the Windows EXE uses `%LOCALAPPDATA%\\Domain-Finder\\results`.
 
 ---
 
@@ -80,3 +80,19 @@ The tool accepts a keyword (e.g., a brand or website name) or a base domain as i
    ```bash
    python app.py
    ```
+
+## Сборка EXE
+
+Сборка выполняется на Windows из корня репозитория. Установите зависимости для
+разработки и запустите PyInstaller:
+
+```powershell
+py -m pip install -r requirements-dev.txt
+py -m PyInstaller --noconfirm --clean Domain-Finder.spec
+```
+
+Конфигурация собирает точку входа `app.py` в оконное приложение без консоли,
+включает `known_sites.json` в пакет и задаёт имя исполняемого файла
+`Domain-Finder`. Готовый файл находится по пути
+`dist\Domain-Finder.exe`. Экспортированные JSON-файлы сохраняются в
+`%LOCALAPPDATA%\Domain-Finder\results`, а не во временной папке приложения.
