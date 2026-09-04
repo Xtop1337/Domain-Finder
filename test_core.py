@@ -1,6 +1,67 @@
+import json
+
 import pytest
 
 import core
+
+
+def test_get_known_sites_path_uses_source_directory_when_not_frozen(monkeypatch, tmp_path):
+    source_file = tmp_path / "core.py"
+    known_sites_file = tmp_path / "known_sites.json"
+    known_sites_file.write_text('{"source": ["source.example"]}', encoding="utf-8")
+    monkeypatch.setattr(core, "__file__", str(source_file))
+    monkeypatch.delattr(core.sys, "_MEIPASS", raising=False)
+
+    assert core.get_known_sites_path() == known_sites_file
+    assert core.load_known_sites() == {"source": ["source.example"]}
+
+
+def test_get_known_sites_path_uses_pyinstaller_bundle_when_frozen(monkeypatch, tmp_path):
+    bundle_dir = tmp_path / "_MEI12345"
+    monkeypatch.setattr(core.sys, "_MEIPASS", str(bundle_dir), raising=False)
+
+    assert core.get_known_sites_path() == bundle_dir / "known_sites.json"
+
+
+def test_load_known_sites_reads_pyinstaller_bundle_file(monkeypatch, tmp_path):
+    bundle_dir = tmp_path / "_MEI12345"
+    bundle_dir.mkdir()
+    (bundle_dir / "known_sites.json").write_text(
+        '{"example": ["example.com"]}', encoding="utf-8"
+    )
+    monkeypatch.setattr(core.sys, "_MEIPASS", str(bundle_dir), raising=False)
+
+    assert core.load_known_sites() == {"example": ["example.com"]}
+
+
+def test_results_dir_uses_localappdata_on_windows(monkeypatch, tmp_path):
+    monkeypatch.setattr(core.sys, "platform", "win32")
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "AppData" / "Local"))
+
+    assert core.get_results_dir() == (
+        tmp_path / "AppData" / "Local" / "Domain Finder" / "results"
+    )
+
+
+def test_results_dir_falls_back_to_home_and_is_created(monkeypatch, tmp_path):
+    results_dir = tmp_path / "Domain Finder" / "results"
+    monkeypatch.setattr(core.sys, "platform", "linux")
+    monkeypatch.setattr(core.Path, "home", lambda: tmp_path)
+
+    assert core._ensure_results_dir() == results_dir
+    assert results_dir.is_dir()
+
+
+def test_save_json_uses_the_configured_results_directory(monkeypatch, tmp_path):
+    results_dir = tmp_path / "results"
+    monkeypatch.setattr(core, "get_results_dir", lambda: results_dir)
+
+    saved_path = core.save_json("Example Site", {"domains": ["example.com"]})
+
+    assert saved_path.parent == results_dir
+    assert json.loads(saved_path.read_text(encoding="utf-8")) == {
+        "domains": ["example.com"]
+    }
 
 
 def test_resolve_keyword_normalizes_domain_like_input():
