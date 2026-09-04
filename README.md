@@ -19,7 +19,7 @@ Domain Finder — это кроссплатформенное приложени
 
 ## 🚀 Установка и запуск
 
-1. **Предварительные требования**: Убедитесь, что у вас установлен Python версии 3.8 или выше.
+1. **Предварительные требования**: Убедитесь, что у вас установлен Python версии 3.10 или выше.
 2. **Клонирование/Скачивание**: Скачайте проект в удобную для вас директорию.
 3. **Установка зависимостей**: 
    Откройте терминал в папке с проектом и выполните команду:
@@ -64,7 +64,7 @@ The tool accepts a keyword (e.g., a brand or website name) or a base domain as i
 
 ## 🚀 Installation & Usage
 
-1. **Prerequisites**: Make sure you have Python 3.8 or higher installed.
+1. **Prerequisites**: Make sure you have Python 3.10 or higher installed.
 
 2. **Clone / Download**: Download or clone the repository to your preferred directory.
 
