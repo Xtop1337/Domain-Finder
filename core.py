@@ -10,7 +10,9 @@ from __future__ import annotations
 import csv
 import io
 import json
+import os
 import re
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -24,17 +26,32 @@ HACKERTARGET_URL = "https://api.hackertarget.com/hostsearch/?q={q}"
 TIMEOUT = 15
 USER_AGENT = "domain-finder/1.0 (+local)"
 
-DATA_DIR = Path(__file__).parent
-KNOWN_SITES_PATH = DATA_DIR / "known_sites.json"
-RESULTS_DIR = DATA_DIR / "results"
 SUPPORTED_SOURCES = ("crt.sh", "hackertarget")
 
 
+def get_known_sites_path() -> Path:
+    """Return the bundled known-sites file path for the current runtime."""
+    bundle_dir = getattr(sys, "_MEIPASS", None)
+    if bundle_dir:
+        return Path(bundle_dir) / "known_sites.json"
+    return Path(__file__).resolve().parent / "known_sites.json"
+
+
+def get_results_dir() -> Path:
+    """Return a user-writable directory for saved search results."""
+    if sys.platform == "win32":
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        if local_app_data:
+            return Path(local_app_data) / "Domain Finder" / "results"
+    return Path.home() / "Domain Finder" / "results"
+
+
 def load_known_sites() -> dict[str, list[str]]:
-    if not KNOWN_SITES_PATH.exists():
+    known_sites_path = get_known_sites_path()
+    if not known_sites_path.exists():
         return {}
     try:
-        with KNOWN_SITES_PATH.open("r", encoding="utf-8") as f:
+        with known_sites_path.open("r", encoding="utf-8") as f:
             return json.load(f)
     except (json.JSONDecodeError, OSError):
         return {}
@@ -168,15 +185,17 @@ def _query_hackertarget(domain: str) -> tuple[set[str], str | None]:
     return _clean(raw_values), None
 
 
-def _ensure_results_dir() -> None:
-    RESULTS_DIR.mkdir(exist_ok=True)
+def _ensure_results_dir() -> Path:
+    results_dir = get_results_dir()
+    results_dir.mkdir(parents=True, exist_ok=True)
+    return results_dir
 
 
 def save_json(keyword: str, payload: dict) -> Path:
-    _ensure_results_dir()
+    results_dir = _ensure_results_dir()
     safe = re.sub(r"[^a-z0-9._-]+", "_", keyword.lower()) or "result"
     ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    path = RESULTS_DIR / f"{safe}_{ts}.json"
+    path = results_dir / f"{safe}_{ts}.json"
     with path.open("w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
     return path
